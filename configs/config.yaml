@@ -1,0 +1,56 @@
+PREPROCESS:
+  FOLDER_ROOT: '/home/wsco1/yyz/dataset/endo/c3vd/trans_t3_b'
+
+DATA:
+  ROOT: '/home/wsco1/yyz/dataset/endo'
+  HEIGHT: 512
+  WIDTH: 640
+  CONTEXT_SIZE: 7
+  CAMERA_EMBED_DIM: 256
+  SPARSE_RANGE: [100, 500]
+  DYNAMIC_SAMPLING: True
+
+SPLIT:
+  OUTPUT: '/home/wsco1/yyz/dataset/endo/split'
+  RGB_DIR: 'color'
+  DEPTH_DIR: 'depth'
+  POSE_FILE: 'pose.txt'
+  RGB_EXT: [".jpg", ".png", ".jpeg"]
+  DEPTH_EXT: [".png", ".tiff", ".tif"]
+  RATIO: [0.8, 0.1, 0.1]
+
+OPTIMIZER:
+  NAME: adamw
+  LR: 1e-5
+  WEIGHT_DECAY: 1e-4
+  MOMENTUM: 0.9
+
+SCHEDULER:
+ NAME: diffusers_cosine
+ WARMUP_STEPS: 0.1
+
+DATALOADER:
+  TRAIN:
+    BATCH_SIZE: 1
+    SHUFFLE: true
+    DROP_LAST: true
+  VAL:
+    BATCH_SIZE: 1
+    SHUFFLE: false
+    DROP_LAST: false
+  TEST:
+    BATCH_SIZE: 1
+    SHUFFLE: false
+    DROP_LAST: false
+  NUM_WORKERS: 4
+
+MARIGOLD_DC:
+  CHECKPOINT: prs-eth/marigold-depth-v1-0
+  DTYPE: torch.float32
+
+DEBUG:
+  ROOT: ./debug
+
+TRAIN:
+  EPOCH: 100
+  USE_GEO_LOSS: false
