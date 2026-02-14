@@ -96,12 +96,12 @@ if __name__ == '__main__':
             depth_latents = pipe.encode_batch_depth(gt_depth, generator)
             
             latent_h, latent_w = color_latents.shape[-2:]
-            noise = pipe.generate_correlated_noise(
-                batch_size=B, num_frames=T, latent_shape=(4, latent_h, latent_w),
-                poses=pose, intrinsics=intrinsic, sparse_depths=sparse,
-                generator=generator, correlation_strength=0.8, debug=False
-            )
-
+            # noise = pipe.generate_correlated_noise(
+            #     batch_size=B, num_frames=T, latent_shape=(4, latent_h, latent_w),
+            #     poses=pose, intrinsics=intrinsic, sparse_depths=sparse,
+            #     generator=generator, correlation_strength=0.8, debug=False
+            # )
+            noise = torch.randn_like(depth_latents)
             timesteps = torch.randint(0, pipe.scheduler.config.num_train_timesteps, (B,), device=device).long()
             timesteps_expanded = timesteps.repeat_interleave(T)
 

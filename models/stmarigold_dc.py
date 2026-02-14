@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from loguru import logger
 from diffusers import DDIMScheduler
 
-from models.temporal_module import TemporalAttention
+from models.temporal_module import TemporalAttention, depth_transform
 from models.marigold_dc import MarigoldDepthCompletionPipeline
 
 
@@ -83,24 +83,23 @@ class SpatioTemporalMarigoldPipeline(MarigoldDepthCompletionPipeline):
         h, w = latents.shape[-2:]
         return latents.view(B, T, 4, h, w)
 
-    def encode_batch_depth(self, depth_batch, generator=None, max_depth=10.0):
+    def encode_batch_depth(self, depth_batch, generator=None):
         B, T, C, H, W = depth_batch.shape
-        depth_inv = 1.0 / (depth_batch + 1e-6)
-        mask_invalid = depth_batch < 1e-6
-        depth_inv[mask_invalid] = 0.0
         
-        depth_flat = depth_inv.view(B, T, -1)
+        # --- 放弃旧逻辑 ---
+        # depth_inv = 1.0 / (depth_batch + 1e-6) ... (删除这些代码)
         
-        d_min = depth_flat.min(dim=-1, keepdim=True)[0].view(B, T, 1, 1, 1)
-        d_max = depth_flat.max(dim=-1, keepdim=True)[0].view(B, T, 1, 1, 1)
+        # --- 新逻辑：统一 Log 变换 ---
+        # 使用和 Sparse 完全一样的变换函数
+        depth_norm = depth_transform(depth_batch)
         
-        scale = d_max - d_min + 1e-6
-        depth_01 = (depth_inv - d_min) / scale
-        depth_3c = depth_01.repeat(1, 1, 3, 1, 1)
-        images = 2.0 * depth_3c - 1.0 
+        # depth_norm 已经是单通道 [-1, 1] 了
+        # Marigold 的 VAE 需要 3 通道输入 (复制 3 份)
+        depth_3c = depth_norm.repeat(1, 1, 3, 1, 1) # [B, T, 3, H, W]
         
-        images_flat = images.view(B * T, 3, H, W).to(self.device, dtype=self.dtype)
+        images_flat = depth_3c.view(B * T, 3, H, W).to(self.device, dtype=self.dtype)
         
+        # VAE 编码
         with torch.no_grad():
             latents_dist = self.vae.encode(images_flat).latent_dist
             latents = latents_dist.sample(generator) * self.vae.config.scaling_factor
@@ -211,7 +210,7 @@ class SpatioTemporalMarigoldPipeline(MarigoldDepthCompletionPipeline):
         old_bias = old_conv.bias.data
         
         # 定义新卷积: 输入 9 通道
-        new_in_channels = 9 
+        new_in_channels = 10
         new_conv = nn.Conv2d(
             new_in_channels, old_conv.out_channels, 
             kernel_size=old_conv.kernel_size, 
