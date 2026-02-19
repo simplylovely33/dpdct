@@ -3,6 +3,7 @@ import sys
 import yaml
 import torch
 import random
+import numpy as np
 from loguru import logger
 
 def load_config(config_path):
@@ -51,7 +52,162 @@ def initialization(config_path):
     cfg = load_config(config_path)
     device = device_confirmation()
     return cfg, device
+
     
+def load_config(config_path):
+    """
+    Load .yaml Configuration File
+    """
+    with open(config_path, 'r', encoding='utf-8') as f:
+        try:
+            config = yaml.safe_load(f)
+            return config
+        except yaml.YAMLError as e:
+            print(f"WARNING: Loading Configuration file failure - {e}")
+            return None
+
+def read_json_file(file_path: str):
+    """
+    read the json file and return the data
+    """
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            data = json.load(file)
+        return data
+    except FileNotFoundError:
+        print(f"File {file_path} not found")
+        return None
+    except json.JSONDecodeError:
+        print(f"File {file_path} is not a valid JSON format")
+        return None
+
+
+def get_specific_keys(data: list, keys_to_keep: list):
+    """
+    get the specific keys from the data
+    """
+    specific_data = []
+    for item in data:
+        filtered_item = {}
+        for k in keys_to_keep:
+            if k in item:
+                filtered_item[k] = item[k]
+        specific_data.append(filtered_item)
+    return specific_data
+
+def get_pose_component(camera_pose: np.ndarray, Tcw=False):
+    """
+    get the rotation and translation components from the camera pose
+    """
+    if Tcw:
+        camera_pose = np.linalg.inv(camera_pose)
+    else:
+        pass
+    R, t = camera_pose[:3, :3], camera_pose[:3, 3]
+
+    return R, t
+
+
+def get_poses_component(camera_poses, Tcw=False):
+    """
+    get the rotation and translation components from the camera poses
+    """
+    rotations, translations = [], []
+    for pose in camera_poses:
+        if Tcw:
+            pose = np.linalg.inv(pose)
+        else:
+            pass
+        R, t = pose[:3, :3], pose[:3, 3]
+        rotations.append(R)
+        translations.append(t)
+    return np.array(rotations), np.array(translations)
+
+def project_mapoints_to_img(map_keyframe, map_points):
+    """
+    project the map points to the image plane
+    """
+    camera = map_keyframe['camera']
+    fx, fy, cx, cy = camera['fx'], camera['fy'], camera['cx'], camera['cy']
+    camera_pose = np.array(ast.literal_eval(map_keyframe['pose']))
+    R, t = get_pose_component(camera_pose, Tcw=False)
+
+    projected_points = []
+    for point in map_points:
+        pt = np.array(point['pt'])
+        pt_wc = R @ pt + t
+        if pt_wc[2] <= 0:
+            continue
+        x = pt_wc[0] / pt_wc[2]
+        y = pt_wc[1] / pt_wc[2]
+        
+        u = fx * x + cx
+        v = fy * y + cy
+
+        projected_point = {
+            'id': point['id'],
+            'pt_3d': pt,
+            'pt_2d': np.array([u, v]),
+            'depth': pt_wc[2],
+            'color': point['color']
+        }
+
+        projected_points.append(projected_point)
+
+    return projected_points
+
+def create_depth_map(projected_points, map_keyframe, debug=False):
+    """
+    create the depth map from the projected points
+    """
+    camera = map_keyframe['camera']
+    height, width = camera['height'], camera['width']
+    depth_map = np.zeros((height, width), dtype=np.float32)
+    for point in projected_points:
+        u, v = point['pt_2d']
+        u_int, v_int = int(round(u)), int(round(v))
+         # Check if the point is within image bounds
+        if 0 <= u_int < width and 0 <= v_int < height:
+            # Update depth map with the depth value
+            # If multiple points project to the same pixel, keep the closest one
+            current_depth = depth_map[v_int, u_int]
+            if current_depth == 0 or point['depth'] < current_depth:
+                depth_map[v_int, u_int] = point['depth']
+    if debug:
+        current_file_path = os.path.abspath(__file__)
+        output_folder = os.path.join(
+            os.path.dirname(current_file_path), 'debug', 'slam_depth'
+        )
+        output_path = os.path.join(output_folder, f'{map_keyframe["id"]:06d}.png')
+        if np.max(depth_map) > 0:
+            normalized_depth = (depth_map / np.max(depth_map) * 255).astype(np.uint8)
+            # Save using OpenCV (uncomment if needed)
+            cv2.imwrite(output_path, normalized_depth)
+    else:
+        pass
+    return depth_map
+
+def project_all_keyframes(map_keyframes, map_points, debug=True):
+    """
+    project all keyframes' map points to the image plane
+    """
+    keyframes_id, projected_points, depth_maps, = [], [], []
+    for keyframe in map_keyframes:
+        keyframes_id.append(keyframe['id'])
+        projected_point = project_mapoints_to_img(keyframe, map_points)
+        projected_points.append(projected_point)
+        depth_map = create_depth_map(projected_point, keyframe, debug)
+        depth_maps.append(depth_map)
+    
+    return {'keyframes_id': keyframes_id, 'projected_points': projected_points,'depth_map': depth_maps}
+
+
+def save_npy(index, save_path):
+    """
+    save the numpy array to the specified path
+    """
+    np.save(save_path, index)
+
 
 class EndoSplitGenerator:
     def __init__(self, cfg, random_seed=42):

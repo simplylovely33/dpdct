@@ -54,3 +54,12 @@ DEBUG:
 TRAIN:
   EPOCH: 100
   USE_GEO_LOSS: false
+
+### SLAM ###
+KEYFRAMS_KEYS: ['id', 'tilestamp', 'img_id', 'pose', 'camera', 'kps']
+POINTS_KEYS: ['id', '_observations', 'pt', 'color', 'des', 'normal']
+
+PYSLAM:
+  input_video_path: '/home/wsco1/yyz/pyslam/data/videos/sigmoid_t3_a/video_color.avi'
+  output_folder: '/home/wsco1/yyz/pyslam/module/debug'
+  map_setup_json: '/home/wsco1/yyz/dataset/endo/c3vd/sigmoid_t1_a/slam_result/slam_state/map.json'
