@@ -10,39 +10,13 @@ from transformers import CLIPTextModel, CLIPTokenizer
 from models.marigold_dc import MarigoldDepthCompletionPipeline
 from models.temporal_layers import TemporalTransformer3D
 
-class CameraPoseEncoder(nn.Module):
-    """
-    将相机内参 (K) 和相对位姿 (T) 编码为 Embedding。
-    输入: 
-        K_flat: [B, T, 4] (fx, fy, cx, cy 归一化后)
-        Pose_flat: [B, T, 12] (3x4 matrix flatten)
-    输出:
-        emb: [B*T, embed_dim]
-    """
-    def __init__(self, embed_dim):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(4 + 12, embed_dim),
-            nn.SiLU(),
-            nn.Linear(embed_dim, embed_dim),
-            nn.SiLU(),
-            nn.Linear(embed_dim, embed_dim),
-        )
-
-    def forward(self, k, pose):
-        # k: [B, T, 4], pose: [B, T, 12]
-        x = torch.cat([k, pose], dim=-1) # [B, T, 16]
-        # Flatten time
-        b, t, c = x.shape
-        x = x.view(b * t, c)
-        return self.net(x)
-
 class VideoMarigoldPipeline(MarigoldDepthCompletionPipeline):
     """
     支持时序一致性的 Video Marigold Pipeline。
+    纯净版：移除了 CameraPoseEncoder，完全依靠 10通道 Sparse 输入和 Temporal Attention 提供时空约束。
     """
     
-    def setup_video_model(self, num_frames=5, camera_embed_dim=256):
+    def setup_video_model(self, num_frames=5):
         """
         初始化模型结构：修改输入层，注入时序层，冻结 Spatial 层。
         必须在加载预训练权重后调用。
@@ -72,12 +46,10 @@ class VideoMarigoldPipeline(MarigoldDepthCompletionPipeline):
         modules_to_patch = {}
         for name, module in self.unet.named_modules():
             if module.__class__.__name__ == "Transformer2DModel":
-                # 获取参数
                 dim = module.config.in_channels if hasattr(module.config, "in_channels") else module.norm.weight.shape[0]
                 heads = module.config.num_attention_heads
                 head_dim = module.config.attention_head_dim
                 
-                # 创建 Temporal Layer
                 temporal_layer = TemporalTransformer3D(
                     dim=dim,
                     num_attention_heads=heads,
@@ -91,31 +63,21 @@ class VideoMarigoldPipeline(MarigoldDepthCompletionPipeline):
                 if not hasattr(module, "_original_forward"):
                     module._original_forward = module.forward
                 
-                # --- 定义新的 forward (关键修复：过滤 num_frames) ---
                 def new_forward(self_module, hidden_states, encoder_hidden_states=None, *args, **kwargs):
-                    # 1. 提取并分离 num_frames
-                    # 我们需要把它拿出来给 temporal layer 用，但不要传给 spatial layer
-                    
+                    # 分离 num_frames，不传给 spatial layer
                     cross_attention_kwargs = kwargs.get("cross_attention_kwargs", {})
                     T = 1
-                    
-                    # [关键修改] 创建一个 clean 的 kwargs 用于 spatial 调用
                     spatial_kwargs = kwargs.copy()
                     
                     if cross_attention_kwargs is not None:
-                        # 浅拷贝字典，避免修改原字典影响其他层
                         spatial_cross_attn_kwargs = cross_attention_kwargs.copy()
-                        
-                        # 如果有 num_frames，提取出来并从 spatial 参数中删除
                         if "num_frames" in spatial_cross_attn_kwargs:
                             T = spatial_cross_attn_kwargs.pop("num_frames")
-                        
                         spatial_kwargs["cross_attention_kwargs"] = spatial_cross_attn_kwargs
                     
-                    # 2. 先跑 Spatial (使用清洗过的 kwargs，不会报错了)
+                    # 1. 先跑 Spatial
                     spatial_out = self_module._original_forward(hidden_states, encoder_hidden_states, *args, **spatial_kwargs)
                     
-                    # 健壮地提取 Tensor
                     if isinstance(spatial_out, tuple):
                         x = spatial_out[0]
                     elif hasattr(spatial_out, "sample"):
@@ -123,11 +85,11 @@ class VideoMarigoldPipeline(MarigoldDepthCompletionPipeline):
                     else:
                         x = spatial_out
                         
-                    # 3. 再跑 Temporal (使用提取出来的 T)
+                    # 2. 再跑 Temporal
                     temporal_out = self_module.temporal_layer(x, num_frames=T)
                     output = x + temporal_out
                     
-                    # 保持原有的返回结构
+                    # 保持原有返回结构
                     if isinstance(spatial_out, tuple):
                         return (output,) + spatial_out[1:]
                     elif hasattr(spatial_out, "sample"):
@@ -148,28 +110,11 @@ class VideoMarigoldPipeline(MarigoldDepthCompletionPipeline):
         for name, module in self.unet.named_modules():
             if hasattr(module, "temporal_layer"):
                 module.temporal_layer.requires_grad_(True)
-        
-        # --- 4. Pose Encoder ---
-        self.pose_encoder = CameraPoseEncoder(camera_embed_dim)
-        self.pose_encoder.requires_grad_(True)
 
     def to(self, *args, **kwargs):
+        # 移除了 pose_encoder 的显式设备转移
         super().to(*args, **kwargs)
-        if hasattr(self, "pose_encoder") and self.pose_encoder is not None:
-            self.pose_encoder = self.pose_encoder.to(*args, **kwargs)
         return self
-
-    def encode_camera(self, intrinsics, poses):
-        B, T = poses.shape[:2]
-        poses_flat = poses[:, :, :3, :].reshape(B, T, 12)
-        if intrinsics.shape[-1] == 3:
-            k_flat = torch.stack([
-                intrinsics[:, :, 0, 0], intrinsics[:, :, 1, 1],
-                intrinsics[:, :, 0, 2], intrinsics[:, :, 1, 2]
-            ], dim=-1)
-        else:
-            k_flat = intrinsics
-        return self.pose_encoder(k_flat, poses_flat) 
 
     # --- 辅助函数 ---
     def _get_empty_text_embedding(self, device, dtype):
@@ -199,8 +144,7 @@ class VideoMarigoldPipeline(MarigoldDepthCompletionPipeline):
         rgb = batch['color'].to(device, dtype=dtype) 
         sparse = batch['sparse'].to(device, dtype=dtype)
         gt_depth = batch['depth'].to(device, dtype=dtype)
-        pose = batch['pose'].to(device, dtype=dtype)
-        K = batch['intrinsic'].to(device, dtype=dtype)
+        # 不再强制需要 Pose 和 K 用于前向传播，但后续加 Geometric Loss 还会用到
         
         B, T = rgb.shape[:2]
         
@@ -232,13 +176,10 @@ class VideoMarigoldPipeline(MarigoldDepthCompletionPipeline):
         timesteps = torch.randint(0, self.scheduler.config.num_train_timesteps, (B*T,), device=device).long()
         noisy_latents = self.scheduler.add_noise(depth_latents, noise, timesteps)
         
-        # 6. Pose Embedding
-        cam_emb = self.encode_camera(K, pose) 
-        
-        # 7. UNet Input
+        # 6. UNet Input (10 通道)
         unet_input = torch.cat([latents, noisy_latents, sparse_small, mask_small], dim=1)
         
-        # 8. Forward
+        # 7. Forward
         empty_text_embed = self._get_empty_text_embedding(device, dtype)
         encoder_hidden_states = empty_text_embed.repeat(B*T, 1, 1) 
         

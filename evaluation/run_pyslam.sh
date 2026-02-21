@@ -3,7 +3,7 @@
 image_folder=$1
 folder_name=$2
 
-python pyslam_preprocess.py --input_dir "$image_folder" --scene_name "$folder_name"
+python preprocess_pyslam.py --input_dir "$image_folder" --scene_name "$folder_name"
 
 config_path=/home/wsco1/yyz/pyslam/config.yaml
 sed -i "127s#\(base_path: ./data/videos/\).*#\1${folder_name}#" "$config_path"

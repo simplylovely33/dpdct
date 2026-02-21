@@ -76,7 +76,7 @@ class MarigoldDepthCompletionPipeline(MarigoldDepthPipeline):
 
         # Preprocess input images
         image, padding, original_resolution = self.image_processor.preprocess(
-            image.resize((674,540)), processing_resolution=processing_resolution, device=device, dtype=self.dtype
+            image, processing_resolution=processing_resolution, device=device, dtype=self.dtype
         )  # [N,3,PPH,PPW]
 
         # Check sparse depth dimensions

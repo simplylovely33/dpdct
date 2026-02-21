@@ -157,8 +157,6 @@ def infer_sliding_window(pipe, dataset, window_size=5, stride=2, device="cuda"):
         # E. 扩散循环
         pipe.scheduler.set_timesteps(50)
         
-        cam_emb = pipe.encode_camera(K_batch, pose_batch)
-        
         # Empty Text
         empty_text_embed = pipe._get_empty_text_embedding(device, pipe.unet.dtype)
         encoder_hidden_states = empty_text_embed.repeat(B*T, 1, 1)
@@ -239,8 +237,7 @@ def main():
     
     # 插入组件
     pipe.setup_video_model(
-        num_frames=cfg['DATA']['CONTEXT_SIZE'],
-        camera_embed_dim=cfg['DATA']['CAMERA_EMBED_DIM']
+        num_frames=cfg['DATA']['CONTEXT_SIZE']
     )
     
     # 移动到 GPU
@@ -250,7 +247,6 @@ def main():
     logger.info(f"Loading weights from {args.checkpoint}")
     state_dict = torch.load(args.checkpoint)
     pipe.unet.load_state_dict(state_dict['unet_state'], strict=False)
-    pipe.pose_encoder.load_state_dict(state_dict['pose_encoder'])
     
     dataset = EndoscopyDataset(cfg, mode='val')
     

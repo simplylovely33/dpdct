@@ -16,9 +16,7 @@ if __name__ == "__main__":
     
     save_folder = config['PYSLAM']['output_folder']
     os.makedirs(save_folder, exist_ok=True)
-    
-    map_setup_json = config['PYSLAM']['map_setup_json']
-    map_setup = utils.read_json_file(map_setup_json)
+
     map_data = map_setup['map']
     map_keyframes = utils.get_specific_keys(map_data['keyframes'],  config['KEYFRAMS_KEYS'])
     map_points = utils.get_specific_keys(map_data['points'], config['POINTS_KEYS'])

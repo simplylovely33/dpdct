@@ -44,10 +44,7 @@ def main():
     )
     
     # 初始化视频模块 (此时新插入的层在 CPU)
-    pipe.setup_video_model(
-        num_frames=cfg['DATA']['CONTEXT_SIZE'],
-        camera_embed_dim=cfg['DATA']['CAMERA_EMBED_DIM']
-    )
+    pipe.setup_video_model(num_frames=cfg['DATA']['CONTEXT_SIZE'])
     
     # [修改点 2] 结构修改完成后，统一移动到 GPU
     pipe = pipe.to(device)
@@ -63,7 +60,6 @@ def main():
     # 收集需要训练的参数: conv_in, temporal_layers, pose_encoder
     trainable_params = []
     trainable_params += list(pipe.unet.conv_in.parameters())
-    trainable_params += list(pipe.pose_encoder.parameters())
     
     for name, module in pipe.unet.named_modules():
         if hasattr(module, "temporal_layer"):
@@ -77,7 +73,6 @@ def main():
     
     for epoch in range(args.epochs):
         pipe.unet.train()
-        pipe.pose_encoder.train()
         
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}")
         for batch in progress_bar:
@@ -106,7 +101,6 @@ def main():
             # 保存关键部分的权重
             torch.save({
                 'unet_state': pipe.unet.state_dict(),
-                'pose_encoder': pipe.pose_encoder.state_dict()
             }, save_path)
             logger.info(f"Saved checkpoint to {save_path}")
 
